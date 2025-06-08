@@ -280,7 +280,7 @@ def Score_list(url1):
     print(f"4.3分GPA: {gpa_4:.2f}")
     try:
         df.to_csv(f'5分制所有课程均绩{gpa:.2f}_成绩单.csv', encoding='utf-8')
-        df_4.to_csv(f'4分制所有课程均绩{gpa_4:.2f}_成绩单.csv', encoding='utf-8')
+        df_4.to_csv(f'4.3分制所有课程均绩{gpa_4:.2f}_成绩单.csv', encoding='utf-8')
         print(f'已经打印好成绩单，保存为csv，使用excel打开即可')
 
     except Exception as e:
