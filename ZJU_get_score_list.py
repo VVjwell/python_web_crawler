@@ -3,7 +3,7 @@ import time
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-
+import numpy as np
 # 输入用户信息以查询
 user_data = {
     'username': None,  # 学号
@@ -12,6 +12,63 @@ user_data = {
     '_eventId': 'submit'
 }
 
+def GPAto4(df):
+    # 初始化新列
+    df['4分制绩点'] = np.nan  # 默认NaN
+
+    # 统一处理 "得分" 列（兼容数字、字母、中文）
+    for idx, row in df.iterrows():
+        score = str(row['得分']).strip()  # 转为字符串并去除空格
+
+        # 1. 处理百分制数字（如 "85"）
+        if score.isdigit():
+            score_num = float(score)
+            if score_num >= 86:
+                df.at[idx, '4分制绩点'] = 4.0
+            elif 83 <= score_num <= 85:
+                df.at[idx, '4分制绩点'] = 3.9
+            elif 80 <= score_num <= 82:
+                df.at[idx, '4分制绩点'] = 3.6
+            elif 77 <= score_num <= 79:
+                df.at[idx, '4分制绩点'] = 3.3
+            elif 74 <= score_num <= 76:
+                df.at[idx, '4分制绩点'] = 3.0
+            elif 71 <= score_num <= 73:
+                df.at[idx, '4分制绩点'] = 2.7
+            elif 68 <= score_num <= 70:
+                df.at[idx, '4分制绩点'] = 2.4
+            elif 65 <= score_num <= 67:
+                df.at[idx, '4分制绩点'] = 2.1
+            elif 62 <= score_num <= 64:
+                df.at[idx, '4分制绩点'] = 1.8
+            elif 60 <= score_num <= 61:
+                df.at[idx, '4分制绩点'] = 1.5
+            else:
+                df.at[idx, '4分制绩点'] = 0.0
+
+        # 2. 处理五级制（A/B/C/D/F）
+        elif score.upper() in ['A', 'B', 'C', 'D', 'F']:
+            grade_map = {'A': 4.0, 'B': 3.5, 'C': 2.5, 'D': 1.5, 'F': 0.0}
+            df.at[idx, '4分制绩点'] = grade_map[score.upper()]
+
+        # 3. 处理二级制（合格/不合格）
+        elif score in ['合格', '不合格']:
+            df.at[idx, '4分制绩点'] = 3.0 if score == '合格' else 0.0
+        # 4.A+ A A-
+        elif score.upper() in ['A+','A','A-' 'B+','B','B-',  'C+','C','C-',   'D', 'F']:
+            grade_map = {'A+':4.0,'A':4.0,'A-':4.0,
+                         'B+':3.8,'B':3.5,'B-':3.2,
+                         'C+':2.8,'C':2.5,'C-':2.2,
+                         'D':1.5, 'F':0}
+            df.at[idx, '4分制绩点'] = grade_map[score.upper()]
+        # 5 优秀 良好 中等 及格 不及格
+        elif score in ['优秀', '良好', '中等', '及格' ,'不及格']:
+            grade_map = {
+                '优秀':4.0, '良好':3.5, '中等':2.5, '及格':1.5, '不及格':0.0
+            }
+            df.at[idx,'4分制绩点'] = grade_map[score]
+
+    return df
 
 # 填充user_data
 def get_user_info():
@@ -20,6 +77,61 @@ def get_user_info():
     user_data['password'] = input("密码：")
 
 
+def remake(df):
+    def assign_score_priority(score):
+        # 1. 百分制：直接使用数值
+        if score.isdigit():
+            return float(score)
+
+        # 2. 五级制（A > B > C > D > F）
+        elif score.upper() in ['A', 'B', 'C', 'D', 'F']:
+            priority_map = {'A': 5, 'B': 4, 'C': 3, 'D': 2, 'F': 1}
+            return priority_map[score.upper()]
+
+        # 3. 二级制（合格 > 不合格）
+        elif score in ['合格', '不合格']:
+            priority_map = {'合格': 2, '不合格': 1}
+            return priority_map[score]
+
+        # 4. A+/A/A-等
+        elif score.upper() in ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D', 'F']:
+            priority_map = {
+                'A+': 11, 'A': 10, 'A-': 9,
+                'B+': 8, 'B': 7, 'B-': 6,
+                'C+': 5, 'C': 4, 'C-': 3,
+                'D': 2, 'F': 1
+            }
+            return priority_map[score.upper()]
+        # 5.优秀等
+        elif score in ['优秀', '良好', '中等', '及格' ,'不及格']:
+            priority_map = {
+                '优秀':6,'良好':5, '中等':4, '及格':3 ,'不及格':2
+            }
+            return priority_map[score.upper()]
+    # 为成绩分配优先级
+    df['score_priority'] = df['得分'].apply(assign_score_priority)
+    # 识别重名课程（课程列重复）
+    course_counts = df['课程'].value_counts()
+    duplicate_courses = course_counts[course_counts > 1].index
+    if len(duplicate_courses) > 0:
+        # 分离重名课程和非重名课程
+        df_duplicates = df[df['课程'].isin(duplicate_courses)]
+        df_non_duplicates = df[~df['课程'].isin(duplicate_courses)]
+
+        # 对重名课程按优先级排序，保留最高分的记录
+        df_duplicates = df_duplicates.sort_values('score_priority', ascending=False)
+        df_remake = df_duplicates.groupby('课程').first().reset_index()
+
+        # 合并非重名课程和处理后的重名课程
+        df_remake = pd.concat([df_non_duplicates, df_remake], ignore_index=True)
+    else:
+        # 没有重名课程，直接返回原数据框
+        df_remake = df.copy()
+
+        # 删除临时优先级列
+    df_remake = df_remake.drop(columns=['score_priority'])
+
+    return df_remake
 
 # rsa加密
 def _rsa_encrypt(password_str, e_str, M_str):
@@ -31,7 +143,7 @@ def _rsa_encrypt(password_str, e_str, M_str):
     return hex(result_int)[2:].rjust(128, '0')
 
 
-# 最终结果保存到txt文档里
+# 最终结果保存到csv文档里
 def get_course_score(course_resp, df):
     data = json.loads(course_resp.text)
     items = data.get('items', [])
@@ -51,7 +163,7 @@ def get_course_score(course_resp, df):
         return new_df
     else:
         # 合并DataFrame
-        return pd.concate([df, new_df])
+        return pd.concat([df, new_df])
 
 
 # 实现模拟登录，并获取成绩单
@@ -147,15 +259,30 @@ def Score_list(url1):
                 print(f"请求失败，状态码：{course_resp.status_code}")
         except requests.exceptions.RequestException as e:
             print(f"请求过程中发生错误：{e}")
-    ori_df = df
-    df = df[df['得分'] != '弃修']
-    total_credits = df['学分'].sum()
-    gpa_total = (df['绩点']*df['学分']).sum()
-    gpa = round(gpa_total / total_credits, 2)
+    # 处理重修课程
+    df_remake = remake(df)
 
+    filter_conditions = (
+            (df['得分'] != '弃修')
+    )
+    df_filtered = df_remake[filter_conditions].copy()
+    # 计算5分GPA
+    total_credits = df_filtered['学分'].sum()
+    gpa_total = (df_filtered['绩点'] * df_filtered['学分']).sum()
+    gpa = gpa_total / total_credits  # 使用严格四舍五入
+    print(f"5分GPA: {gpa:.2f}")
+    # 计算4分GPA
+    df_4 = GPAto4(df_remake.copy())
+    df_4_filtered = df_4[filter_conditions].copy()
+    total_credits_4 = df_4_filtered['学分'].sum()
+    gpa_total_4 = (df_4_filtered['4分制绩点'] * df_4_filtered['学分']).sum()
+    gpa_4 = gpa_total_4 / total_credits_4 if total_credits_4 > 0 else 0
+    print(f"4分GPA: {gpa_4:.2f}")
     try:
-        ori_df.to_csv(f'所有课程均绩{gpa}_成绩单.csv', encoding='utf-8')
-        print(f'所有课程平均绩点：{gpa}\n已经打印好成绩单，保存为csv，使用excel打开即可')
+        df.to_csv(f'5分制所有课程均绩{gpa:.2f}_成绩单.csv', encoding='utf-8')
+        df_4.to_csv(f'4分制所有课程均绩{gpa_4:.2f}_成绩单.csv', encoding='utf-8')
+        print(f'已经打印好成绩单，保存为csv，使用excel打开即可')
+
     except Exception as e:
         print('如果已打开成绩单.csv，请关闭后再生成')
 
